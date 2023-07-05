@@ -1,11 +1,13 @@
 pub mod champion;
 pub mod item;
+pub mod profile;
 pub mod rune;
 
 use champion::Champion;
 use env_logger::Env;
 use item::Item;
 use log::{debug, error};
+use profile::Profile;
 use reqwest::get;
 use rune::Rune;
 use tokio::{fs, io::AsyncWriteExt, task::JoinSet};
@@ -155,6 +157,106 @@ pub async fn item() -> Result<(), Error> {
     Ok(())
 }
 
+pub async fn profile() -> Result<(), Error> {
+    let res = get("https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/zh_cn/v1/profile-icons.json").await?.error_for_status()?;
+
+    let profile_list: Vec<Profile> = serde_json::from_str(&res.text().await?)?;
+
+    // https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default /v1/profile-icons/0.jpg
+    //                                                              /lol-game-data/assets /v1/profile-icons/0.jpg
+
+    let base_url =
+        "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default";
+
+    let mut set = JoinSet::new();
+
+    let mut sum = 0;
+    for profile in profile_list {
+        let mut url = base_url.to_string();
+        if let Some(path) = profile.path {
+            let path = path
+                .strip_prefix("/lol-game-data/assets")
+                .ok_or("字段值异常")?
+                .to_lowercase();
+            url.push_str(&path);
+            sum += 1;
+            set.spawn(download(url, profile.id.unwrap()));
+        }
+    }
+
+    let mut count = 0;
+    while let Some(_) = set.join_next().await {
+        count += 1;
+        println!("{count}/{sum}");
+    }
+
+    Ok(())
+}
+
+async fn download(url: String, id: i32) -> Result<(), Error> {
+    let path = std::format!("./static/profile/{}.jpg", id);
+    let t = std::path::Path::new(&path);
+    if t.exists() {
+        if t.metadata().unwrap().len() != 0 {
+            return Ok(());
+        }
+        tokio::fs::remove_file(t).await.expect("删除文件失败");
+    };
+    for i in 0..10 {
+        let res = get(&url).await;
+        if res.is_err() {
+            println!("{}, {}/10", url, i);
+            tokio::time::sleep(tokio::time::Duration::new(5, 0)).await;
+            continue;
+        }
+        let res = res?;
+        let mut f = fs::File::create(path).await?;
+        f.write_all_buf(&mut res.bytes().await?).await?;
+
+        return Ok(());
+    }
+    println!("{}, faild!!!!!!", url);
+    Ok(())
+}
+
+// pub async fn profile() -> Result<(), Error> {
+//     let res = get("https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/zh_cn/v1/profile-icons.json").await?.error_for_status()?;
+
+//     let profile_list: Vec<Profile> = serde_json::from_str(&res.text().await?)?;
+
+//     println!("{:#?}", profile_list);
+//     let len = profile_list.len();
+
+//     // https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default /v1/profile-icons/0.jpg
+//     //                                                              /lol-game-data/assets /v1/profile-icons/0.jpg
+
+//     let base_url =
+//         "https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default";
+
+//     let mut count = 0;
+//     for profile in profile_list {
+//         let mut url = base_url.to_string();
+//         if let Some(path) = profile.path {
+//             let path = path
+//                 .strip_prefix("/lol-game-data/assets")
+//                 .ok_or("字段值异常")?
+//                 .to_lowercase();
+//             url.push_str(&path);
+
+//             let res = get(url).await?.error_for_status()?;
+//             if res.status().is_success() {
+//                 count += 1;
+//                 println!("{}/{}, {}", count, len, res.url().path());
+//                 let path = std::format!("./static/profile/{}.png", profile.id.unwrap());
+//                 let mut f = fs::File::create(path).await?;
+//                 f.write_all_buf(&mut res.bytes().await?).await?;
+//             }
+//         }
+//     }
+//     // println!("{}/{}", count, len);
+//     Ok(())
+// }
+
 #[cfg(test)]
 mod test {
 
@@ -173,6 +275,11 @@ mod test {
     #[test]
     fn item_t() {
         tokio_test::block_on(item()).unwrap();
+    }
+
+    #[test]
+    fn profile_t() {
+        tokio_test::block_on(profile()).unwrap();
     }
 }
 
